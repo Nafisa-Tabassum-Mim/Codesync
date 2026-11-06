@@ -15,7 +15,7 @@ Clone the repository using its Git URL, then enter the project folder:
 
 ```sh
 git clone <repository-url>
-cd codesync_demo
+cd Codesync
 ```
 
 Replace `<repository-url>` with the clone URL for this repository. If you already have the project folder, skip these commands.
@@ -36,7 +36,7 @@ Start the backend in a second terminal from the project root. On Windows PowerSh
 
 ```powershell
 cd backend
-py -m venv venv
+python -m venv venv
 .\venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python -m uvicorn main:app --reload --port 8000
