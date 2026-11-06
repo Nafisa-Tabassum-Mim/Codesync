@@ -2,22 +2,18 @@ import { useState } from 'react'
 import { toast, ToastContainer } from 'react-toastify'
 import { executeCode } from '../services/api.js'
 
-const Output = ({ editorRef, language }) => {
-  const [output, setOutput] = useState(null)
+const Output = ({ editorRef, language, result, onResult }) => {
   const [isLoading, setIsLoading] = useState(false)
-  const [isError, setIsError] = useState(false)
 
   const runCode = async () => {
     const sourceCode = editorRef.current.getValue()
     if (!sourceCode) return
     try {
       setIsLoading(true)
-      const { run: result } = await executeCode(language, sourceCode)
-      setOutput(result.output.split('\n'))
-      setIsError(Boolean(result.stderr))
+      const { run } = await executeCode(language, sourceCode)
+      onResult({ text: run.output, isError: Boolean(run.stderr) })
     } catch (error) {
       console.log(error)
-      // toastId: repeated clicks don't stack the same toast
       toast.error(error.message || 'Unable to run code', { toastId: 'run-error' })
     } finally {
       setIsLoading(false)
@@ -36,16 +32,17 @@ const Output = ({ editorRef, language }) => {
       >
         {isLoading ? 'Running...' : 'Run Code'}
       </button>
+      {result?.by && <span className="ml-3 text-xs text-gray-400">Run by {result.by}</span>}
 
       <div
         className={`h-[75vh] overflow-y-auto rounded border bg-[#1e1e1e] p-2 font-mono text-sm ${
-          isError
+          result?.isError
             ? 'border-[#f14c4c] text-[#f48771]'
             : 'border-[#454545] text-[#d4d4d4]'
         }`}
       >
-        {output ? (
-          output.map((line, i) => (
+        {result ? (
+          result.text.split('\n').map((line, i) => (
             <p key={i} className="whitespace-pre-wrap">
               {line}
             </p>

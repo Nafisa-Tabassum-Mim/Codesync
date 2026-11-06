@@ -1,0 +1,110 @@
+import asyncio
+import json
+from dataclasses import dataclass, field
+
+from fastapi import WebSocket
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.room import Room, RoomMember
+from app.models.user import User
+
+LANGUAGES = {"python", "javascript", "typescript", "java"}
+MAX_DOC_CHARS = 50_000
+MAX_MESSAGE_CHARS = 400_000
+MAX_CLIENTS_PER_ROOM = 20
+
+
+class RoomNotFound(Exception):
+    pass
+
+
+class RoomForbidden(Exception):
+    pass
+
+
+class RoomFull(Exception):
+    pass
+
+
+async def authorize(db: AsyncSession, user: User, slug: str) -> Room:
+    """Return the room if the user owns it or has joined it."""
+    room = await db.scalar(select(Room).where(Room.slug == slug))
+    if room is None:
+        raise RoomNotFound()
+    if room.owner_id == user.id:
+        return room
+    member_id = await db.scalar(
+        select(RoomMember.id).where(
+            RoomMember.room_id == room.id, RoomMember.user_id == user.id
+        )
+    )
+    if member_id is None:
+        raise RoomForbidden()
+    return room
+
+
+@dataclass(eq=False)
+class Client:
+    ws: WebSocket
+    user_id: int
+    name: str
+
+
+@dataclass
+class RoomState:
+    text: str | None = None
+    language: str | None = None
+    clients: list[Client] = field(default_factory=list)
+
+
+class CollabHub:
+    def __init__(self) -> None:
+        self._rooms: dict[str, RoomState] = {}
+
+    def join(self, slug: str, client: Client) -> RoomState:
+        state = self._rooms.setdefault(slug, RoomState())
+        if len(state.clients) >= MAX_CLIENTS_PER_ROOM:
+            raise RoomFull()
+        state.clients.append(client)
+        return state
+
+    def leave(self, slug: str, client: Client) -> None:
+        state = self._rooms.get(slug)
+        if state and client in state.clients:
+            state.clients.remove(client)
+
+    def update(self, slug: str, text: str, language: str | None) -> None:
+        state = self._rooms[slug]
+        state.text = text
+        if language in LANGUAGES:
+            state.language = language
+
+    async def broadcast(self, slug, message: dict, exclude: Client | None = None):
+        state = self._rooms.get(slug)
+        if not state:
+            return
+        payload = json.dumps(message)
+        targets = [c for c in state.clients if c is not exclude]
+        results = await asyncio.gather(
+            *(c.ws.send_text(payload) for c in targets), return_exceptions=True
+        )
+        for client, result in zip(targets, results):
+            if isinstance(result, Exception):
+                self.leave(slug, client)
+
+    async def broadcast_presence(self, slug: str) -> None:
+        state = self._rooms.get(slug)
+        if not state:
+            return
+        await self.broadcast(
+            slug,
+            {
+                "type": "presence",
+                "count": len(state.clients),
+                "users": sorted({c.name for c in state.clients}),
+            },
+        )
+
+
+hub = CollabHub()
