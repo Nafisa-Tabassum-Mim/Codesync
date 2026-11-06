@@ -92,7 +92,7 @@ const Myroom = () => {
         </button>
       </div>
 
-      <CodeEditor initialLanguage={room.language} />
+      <CodeEditor key={slug} initialLanguage={room.language} roomSlug={slug} />
     </Screen>
   )
 }
