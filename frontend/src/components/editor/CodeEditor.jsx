@@ -30,6 +30,18 @@ const defineThemes = (monaco) => {
   })
 }
 
+// Monaco's built-in JS/TS checker can leave stale error marks on a model after
+// its language changes (a late result arrives). Remove marks from checkers that
+// don't match the model's current language.
+function clearStaleMarkers(monaco, model) {
+  const lang = model.getLanguageId()
+  for (const owner of ['javascript', 'typescript']) {
+    if (owner !== lang && monaco.editor.getModelMarkers({ resource: model.uri, owner }).length) {
+      monaco.editor.setModelMarkers(model, owner, [])
+    }
+  }
+}
+
 // applies text that came from another user without sending it back
 function applyRemoteText(editor, text, flag) {
   flag.current = true
@@ -48,6 +60,8 @@ const CodeEditor = ({
   onLive,
 }) => {
   const editorRef = useRef(null)
+  const monacoRef = useRef(null)
+  const markerListener = useRef(null)
   const languageRef = useRef(initialLanguage)
   const applyingRemote = useRef(false)
   const pendingText = useRef(null)
@@ -61,7 +75,7 @@ const CodeEditor = ({
       setResult({ text: msg.output, isError: msg.isError, by: msg.user })
       return
     }
-    
+
     if (msg.language && msg.language !== languageRef.current) {
       languageRef.current = msg.language
       setLanguage(msg.language)
@@ -72,6 +86,18 @@ const CodeEditor = ({
   }, [])
 
   const { status, presence, sendUpdate, sendOutput } = useRoomSocket(roomSlug, onRemote)
+
+  // when the language changes, apply it to the editor and drop stale error marks
+  useEffect(() => {
+    const monaco = monacoRef.current
+    const model = editorRef.current?.getModel()
+    if (!monaco || !model) return
+    monaco.editor.setModelLanguage(model, language)
+    clearStaleMarkers(monaco, model)
+  }, [language])
+
+  // stop watching for marker changes when the editor goes away
+  useEffect(() => () => markerListener.current?.dispose(), [])
 
   // tell the page who is connected (the header shows it)
   useEffect(() => {
@@ -84,7 +110,16 @@ const CodeEditor = ({
   }
 
   const onMount = (editor, monaco) => {
+    monacoRef.current = monaco
     editorRef.current = editor
+    monaco.editor.setModelLanguage(editor.getModel(), languageRef.current)
+
+    // whenever Monaco updates marks, drop stale ones from the other language's checker
+    markerListener.current = monaco.editor.onDidChangeMarkers(() => {
+      const model = editor.getModel()
+      if (model) clearStaleMarkers(monaco, model)
+    })
+
     applyingRemote.current = true
     editor.getModel().setEOL(monaco.editor.EndOfLineSequence.LF) // same line endings for everyone
     applyingRemote.current = false
