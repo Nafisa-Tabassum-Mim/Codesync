@@ -15,8 +15,11 @@ const Output = ({ editorRef, language, result, onResult }) => {
       onResult({ text: run.output, isError: Boolean(run.stderr) })
     } catch (error) {
       console.log(error)
-      // fixed id: repeated clicks replace the toast instead of stacking them
-      toast.error(error.message || 'Unable to run code', { toastId: 'run-error' })
+      const message =
+        error.response?.status === 401
+          ? 'Please log in to run code'
+          : error.response?.data?.detail || error.message || 'Unable to run code'
+      toast.error(message, { toastId: 'run-error' })
     } finally {
       setIsLoading(false)
     }
