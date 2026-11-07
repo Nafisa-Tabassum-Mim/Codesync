@@ -61,6 +61,7 @@ const CodeEditor = ({
       setResult({ text: msg.output, isError: msg.isError, by: msg.user })
       return
     }
+    
     if (msg.language && msg.language !== languageRef.current) {
       languageRef.current = msg.language
       setLanguage(msg.language)
