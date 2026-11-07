@@ -30,7 +30,17 @@ const defineThemes = (monaco) => {
   })
 }
 
-// applies text that came from another user without sending it back
+
+function clearStaleMarkers(monaco, model) {
+  const lang = model.getLanguageId()
+  for (const owner of ['javascript', 'typescript']) {
+    if (owner !== lang && monaco.editor.getModelMarkers({ resource: model.uri, owner }).length) {
+      monaco.editor.setModelMarkers(model, owner, [])
+    }
+  }
+}
+
+
 function applyRemoteText(editor, text, flag) {
   flag.current = true
   try {
@@ -48,6 +58,8 @@ const CodeEditor = ({
   onLive,
 }) => {
   const editorRef = useRef(null)
+  const monacoRef = useRef(null)
+  const markerListener = useRef(null)
   const languageRef = useRef(initialLanguage)
   const applyingRemote = useRef(false)
   const pendingText = useRef(null)
@@ -61,7 +73,7 @@ const CodeEditor = ({
       setResult({ text: msg.output, isError: msg.isError, by: msg.user })
       return
     }
-    
+
     if (msg.language && msg.language !== languageRef.current) {
       languageRef.current = msg.language
       setLanguage(msg.language)
@@ -73,7 +85,17 @@ const CodeEditor = ({
 
   const { status, presence, sendUpdate, sendOutput } = useRoomSocket(roomSlug, onRemote)
 
-  // tell the page who is connected (the header shows it)
+
+  useEffect(() => {
+    const monaco = monacoRef.current
+    const model = editorRef.current?.getModel()
+    if (!monaco || !model) return
+    monaco.editor.setModelLanguage(model, language)
+    clearStaleMarkers(monaco, model)
+  }, [language])
+
+  useEffect(() => () => markerListener.current?.dispose(), [])
+
   useEffect(() => {
     onLive?.({ status, presence })
   }, [status, presence, onLive])
@@ -84,7 +106,16 @@ const CodeEditor = ({
   }
 
   const onMount = (editor, monaco) => {
+    monacoRef.current = monaco
     editorRef.current = editor
+    monaco.editor.setModelLanguage(editor.getModel(), languageRef.current)
+
+
+    markerListener.current = monaco.editor.onDidChangeMarkers(() => {
+      const model = editor.getModel()
+      if (model) clearStaleMarkers(monaco, model)
+    })
+
     applyingRemote.current = true
     editor.getModel().setEOL(monaco.editor.EndOfLineSequence.LF) // same line endings for everyone
     applyingRemote.current = false
@@ -106,7 +137,6 @@ const CodeEditor = ({
   const onSelect = (lang) => {
     languageRef.current = lang
     setLanguage(lang)
-    editorRef.current?.setValue(CODE_SNIPPETS[lang] ?? '') // triggers onChange -> shared
   }
 
   const denied = status === 'denied'
