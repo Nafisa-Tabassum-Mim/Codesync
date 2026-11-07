@@ -1,4 +1,5 @@
 import json
+import uuid
 
 from fastapi import APIRouter, WebSocket
 
@@ -14,6 +15,17 @@ UNAUTHENTICATED = 4401
 FORBIDDEN = 4403
 NOT_FOUND = 4404
 ROOM_FULL = 4409
+
+# one stable color per user, so a person has the same color on every screen
+CURSOR_COLORS = [
+    "#f97316", "#38bdf8", "#a78bfa", "#34d399", "#f472b6",
+    "#facc15", "#fb7185", "#2dd4bf", "#818cf8", "#a3e635",
+]
+MAX_AWARENESS_CHARS = 20_000
+
+
+def color_for(user_id: int) -> str:
+    return CURSOR_COLORS[user_id % len(CURSOR_COLORS)]
 
 
 @router.websocket("/api/ws/rooms/{slug}")
@@ -41,6 +53,13 @@ async def room_socket(websocket: WebSocket, slug: str):
             await websocket.close(code=FORBIDDEN)
             return
         client = Client(ws=websocket, user_id=user.id, name=user.name)
+        conn = uuid.uuid4().hex  # unique id for this connection (one per tab)
+        me = {
+            "id": user.id,
+            "name": user.name,
+            "color": color_for(user.id),
+            "conn": conn,
+        }
     try:
         state = hub.join(slug, client)
     except collab_service.RoomFull:
@@ -49,6 +68,8 @@ async def room_socket(websocket: WebSocket, slug: str):
 
     doc = state.doc
     try:
+        # "you" tells this client its own name and color for its live cursor
+        await websocket.send_json({"type": "init", "you": me})
         # 1) everything the room has so far, 2) then tell the client it is caught up
         await websocket.send_bytes(doc.full_state())
         await websocket.send_json({"type": "synced"})
@@ -88,6 +109,15 @@ async def room_socket(websocket: WebSocket, slug: str):
                 continue
             kind = msg.get("type")
 
+            if kind == "awareness":  # live cursors and selections
+                update = msg.get("update")
+                if not isinstance(update, str) or len(update) > MAX_AWARENESS_CHARS:
+                    continue
+                await hub.broadcast(
+                    slug, {"type": "awareness", "update": update}, exclude=client
+                )
+                continue
+
             if kind == "output":  # relay run results to everyone else
                 output = msg.get("output")
                 if not isinstance(output, str) or len(output) > 200_000:
@@ -124,4 +154,6 @@ async def room_socket(websocket: WebSocket, slug: str):
                     await hub.broadcast_bytes(slug, news)  # everyone, sender included
     finally:
         hub.leave(slug, client)
+        # tell the others to remove this connection's cursor right away
+        await hub.broadcast(slug, {"type": "left", "conn": conn})
         await hub.broadcast_presence(slug)
