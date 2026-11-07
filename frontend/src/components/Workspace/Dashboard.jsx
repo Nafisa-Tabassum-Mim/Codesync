@@ -446,7 +446,6 @@ const Dashboard = () => {
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-400 font-bold text-[#1a1208]">
             {user.name[0].toUpperCase()}
           </span>
-          <span className="hidden text-sm md:block">{user.name}</span>
           <button
             type="button"
             onClick={handleLogout}

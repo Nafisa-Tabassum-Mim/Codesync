@@ -18,7 +18,6 @@ ROOM_FULL = 4409
 @router.websocket("/api/ws/rooms/{slug}")
 async def room_socket(websocket: WebSocket, slug: str):
     # CORS does not cover WebSockets, so check the Origin header yourself
-    print("WS origin:", websocket.headers.get("origin"))
     if websocket.headers.get("origin") not in settings.CORS_ORIGINS:
         await websocket.close(code=1008)
         return

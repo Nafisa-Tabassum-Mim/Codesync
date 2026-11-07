@@ -29,6 +29,7 @@ class RoomResponse(BaseModel):
     member_count: int
     created_at: datetime
     joined_at: datetime | None = None
+    members: list[str] = []
 
     # stored as naive UTC; mark it as UTC so the browser reads it correctly
     @field_validator("created_at", "joined_at")
