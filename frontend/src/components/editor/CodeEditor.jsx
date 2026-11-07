@@ -1,4 +1,4 @@
-import './monacoSetup.js' // must run before <Editor/> mounts
+import './monacoSetup.js' 
 import Editor from '@monaco-editor/react'
 import { FileCode2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -8,7 +8,7 @@ import LanguageSelector from './LanguageSelector.jsx'
 import Output from './Output.jsx'
 import { useRoomSocket } from './useRoomSocket.js'
 
-// custom dark theme: navy background, light-orange and blue syntax colors
+
 const defineThemes = (monaco) => {
   monaco.editor.defineTheme('codesync-dark', {
     base: 'vs-dark',
@@ -31,6 +31,8 @@ const defineThemes = (monaco) => {
   })
 }
 
+// Monaco's built-in JS/TS checker can leave stale error marks on a model after
+// switching to a different language, so we clear them when the language changes.
 function clearStaleMarkers(monaco, model) {
   const lang = model.getLanguageId()
   for (const owner of ['javascript', 'typescript']) {
@@ -65,10 +67,10 @@ const CodeEditor = ({
     [initialLanguage],
   )
 
-  const { ydoc, status, presence, sendOutput, sendLanguage } = useRoomSocket(roomSlug, {
-    onOutput,
-    seed,
-  })
+  const { ydoc, awarenessRef, status, presence, sendOutput, sendLanguage } = useRoomSocket(
+    roomSlug,
+    { onOutput, seed },
+  )
 
   // the shared language lives inside the Yjs doc, so every client switches together
   useEffect(() => {
@@ -79,6 +81,7 @@ const CodeEditor = ({
     return () => meta.unobserve(sync)
   }, [ydoc, initialLanguage])
 
+  // when the language changes, apply it to the editor and drop stale error marks
   useEffect(() => {
     const monaco = monacoRef.current
     const model = editorRef.current?.getModel()
@@ -96,6 +99,7 @@ const CodeEditor = ({
     [],
   )
 
+  // tell the page who is connected (the header shows it)
   useEffect(() => {
     onLive?.({ status, presence })
   }, [status, presence, onLive])
@@ -117,8 +121,13 @@ const CodeEditor = ({
     })
 
     model.setEOL(monaco.editor.EndOfLineSequence.LF) // Yjs text uses \n; Windows must not add \r\n
-    // Yjs <-> Monaco: from here on, typing and remote edits both go through the CRDT
-    bindingRef.current = new MonacoBinding(ydoc.getText('text'), model, new Set([editor]))
+
+    bindingRef.current = new MonacoBinding(
+      ydoc.getText('text'),
+      model,
+      new Set([editor]),
+      awarenessRef.current,
+    )
 
     editor.onDidChangeCursorPosition((e) =>
       setCursor({ line: e.position.lineNumber, col: e.position.column }),
@@ -136,7 +145,7 @@ const CodeEditor = ({
       fontSize,
       readOnly: denied,
       minimap: { enabled: false },
-      padding: { top: 14 },
+      padding: { top: 24 }, // room above line 1 for other people's name labels
       scrollBeyondLastLine: false,
       automaticLayout: true,
       tabSize: 4,
