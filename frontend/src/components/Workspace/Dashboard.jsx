@@ -457,7 +457,7 @@ const Dashboard = () => {
         </div>
       </header>
 
-      <div className="relative z-10 mx-auto flex w-full max-w-[1400px] flex-col gap-4 p-4 lg:flex-row">
+      <div className="relative z-10 mx-auto flex w-full  flex-col gap-4 p-4 lg:flex-row">
         {/* sidebar */}
         <nav className="flex gap-2 overflow-x-auto lg:w-56 lg:shrink-0 lg:flex-col">
           {TABS.map(({ id, label, icon: Icon }) => (
