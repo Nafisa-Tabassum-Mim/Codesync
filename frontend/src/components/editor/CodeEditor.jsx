@@ -1,14 +1,15 @@
-import './monacoSetup.js' 
+import './monacoSetup.js' // must run before <Editor/> mounts
 import Editor from '@monaco-editor/react'
 import { FileCode2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MonacoBinding } from 'y-monaco'
+import { UndoManager } from 'yjs'
 import { CODE_SNIPPETS, FILE_NAMES } from './constants.js'
 import LanguageSelector from './LanguageSelector.jsx'
 import Output from './Output.jsx'
 import { useRoomSocket } from './useRoomSocket.js'
 
-
+// custom dark theme: navy background, light-orange and blue syntax colors
 const defineThemes = (monaco) => {
   monaco.editor.defineTheme('codesync-dark', {
     base: 'vs-dark',
@@ -32,7 +33,8 @@ const defineThemes = (monaco) => {
 }
 
 // Monaco's built-in JS/TS checker can leave stale error marks on a model after
-// switching to a different language, so we clear them when the language changes.
+// its language changes (a late result arrives). Remove marks from checkers that
+// don't match the model's current language.
 function clearStaleMarkers(monaco, model) {
   const lang = model.getLanguageId()
   for (const owner of ['javascript', 'typescript']) {
@@ -52,6 +54,7 @@ const CodeEditor = ({
   const editorRef = useRef(null)
   const monacoRef = useRef(null)
   const bindingRef = useRef(null)
+  const undoRef = useRef(null)
   const markerListener = useRef(null)
 
   const [language, setLanguage] = useState(initialLanguage)
@@ -90,9 +93,10 @@ const CodeEditor = ({
     clearStaleMarkers(monaco, model)
   }, [language])
 
-  // tear down the Yjs binding and the marker listener with the component
+  // tear down the undo manager, the Yjs binding and the marker listener with the component
   useEffect(
     () => () => {
+      undoRef.current?.destroy()
       bindingRef.current?.destroy()
       markerListener.current?.dispose()
     },
@@ -115,6 +119,7 @@ const CodeEditor = ({
     const model = editor.getModel()
     monaco.editor.setModelLanguage(model, language)
 
+    // whenever Monaco updates marks, drop stale ones from the other language's checker
     markerListener.current = monaco.editor.onDidChangeMarkers(() => {
       const m = editor.getModel()
       if (m) clearStaleMarkers(monaco, m)
@@ -122,12 +127,28 @@ const CodeEditor = ({
 
     model.setEOL(monaco.editor.EndOfLineSequence.LF) // Yjs text uses \n; Windows must not add \r\n
 
+    // Yjs <-> Monaco. Passing the awareness object is what shows other people's
+    // cursors and selections (the name labels are styled in useRoomSocket).
     bindingRef.current = new MonacoBinding(
       ydoc.getText('text'),
       model,
       new Set([editor]),
       awarenessRef.current,
     )
+
+    // Per-user undo/redo. y-monaco tags this user's edits with the binding itself,
+    // so tracking only the binding means Ctrl+Z never undoes other people's typing
+    // or changes made by the server (like a language switch).
+    undoRef.current?.destroy()
+    const undoManager = new UndoManager(ydoc.getText('text'), {
+      trackedOrigins: new Set([bindingRef.current]),
+    })
+    undoRef.current = undoManager
+    // replace Monaco's own undo (which knows nothing about other users' edits)
+    const { KeyMod, KeyCode } = monaco
+    editor.addCommand(KeyMod.CtrlCmd | KeyCode.KeyZ, () => undoManager.undo())
+    editor.addCommand(KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyZ, () => undoManager.redo())
+    editor.addCommand(KeyMod.CtrlCmd | KeyCode.KeyY, () => undoManager.redo())
 
     editor.onDidChangeCursorPosition((e) =>
       setCursor({ line: e.position.lineNumber, col: e.position.column }),
