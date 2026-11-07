@@ -8,10 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.room import Room, RoomMember
 from app.models.user import User
+from app.services.room_doc import RoomDoc
 
 LANGUAGES = {"python", "javascript", "typescript", "java"}
-MAX_DOC_CHARS = 50_000
-MAX_MESSAGE_CHARS = 400_000
+MAX_UPDATE_BYTES = 1_000_000  # one Yjs update (binary frame)
+MAX_SNIPPET_CHARS = 50_000  # starter code sent with seed / language switch
+MAX_MESSAGE_CHARS = 400_000  # JSON text frames
 MAX_CLIENTS_PER_ROOM = 20
 
 
@@ -53,8 +55,7 @@ class Client:
 
 @dataclass
 class RoomState:
-    text: str | None = None
-    language: str | None = None
+    doc: RoomDoc = field(default_factory=RoomDoc)
     clients: list[Client] = field(default_factory=list)
 
 
@@ -74,24 +75,25 @@ class CollabHub:
         if state and client in state.clients:
             state.clients.remove(client)
 
-    def update(self, slug: str, text: str, language: str | None) -> None:
-        state = self._rooms[slug]
-        state.text = text
-        if language in LANGUAGES:
-            state.language = language
-
-    async def broadcast(self, slug, message: dict, exclude: Client | None = None):
+    async def _send_all(self, slug: str, send, exclude: Client | None) -> None:
         state = self._rooms.get(slug)
         if not state:
             return
-        payload = json.dumps(message)
         targets = [c for c in state.clients if c is not exclude]
         results = await asyncio.gather(
-            *(c.ws.send_text(payload) for c in targets), return_exceptions=True
+            *(send(c.ws) for c in targets), return_exceptions=True
         )
         for client, result in zip(targets, results):
             if isinstance(result, Exception):
                 self.leave(slug, client)
+
+    async def broadcast(self, slug: str, message: dict, exclude: Client | None = None):
+        payload = json.dumps(message)
+        await self._send_all(slug, lambda ws: ws.send_text(payload), exclude)
+
+    async def broadcast_bytes(self, slug: str, data: bytes, exclude: Client | None = None):
+        """Yjs updates travel as binary frames."""
+        await self._send_all(slug, lambda ws: ws.send_bytes(data), exclude)
 
     async def broadcast_presence(self, slug: str) -> None:
         state = self._rooms.get(slug)
