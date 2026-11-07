@@ -1,10 +1,11 @@
+import './monacoSetup.js' // must run before <Editor/> mounts
 import Editor from '@monaco-editor/react'
 import { FileCode2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { MonacoBinding } from 'y-monaco'
 import { CODE_SNIPPETS, FILE_NAMES } from './constants.js'
 import LanguageSelector from './LanguageSelector.jsx'
 import Output from './Output.jsx'
-import { applyTextDiff } from './applyTextDiff.js'
 import { useRoomSocket } from './useRoomSocket.js'
 
 // custom dark theme: navy background, light-orange and blue syntax colors
@@ -30,23 +31,12 @@ const defineThemes = (monaco) => {
   })
 }
 
-
 function clearStaleMarkers(monaco, model) {
   const lang = model.getLanguageId()
   for (const owner of ['javascript', 'typescript']) {
     if (owner !== lang && monaco.editor.getModelMarkers({ resource: model.uri, owner }).length) {
       monaco.editor.setModelMarkers(model, owner, [])
     }
-  }
-}
-
-
-function applyRemoteText(editor, text, flag) {
-  flag.current = true
-  try {
-    applyTextDiff(editor.getModel(), text)
-  } finally {
-    flag.current = false
   }
 }
 
@@ -59,32 +49,35 @@ const CodeEditor = ({
 }) => {
   const editorRef = useRef(null)
   const monacoRef = useRef(null)
+  const bindingRef = useRef(null)
   const markerListener = useRef(null)
-  const languageRef = useRef(initialLanguage)
-  const applyingRemote = useRef(false)
-  const pendingText = useRef(null)
 
   const [language, setLanguage] = useState(initialLanguage)
   const [result, setResult] = useState(null)
   const [cursor, setCursor] = useState({ line: 1, col: 1 })
 
-  const onRemote = useCallback((msg) => {
-    if (msg.type === 'output') {
-      setResult({ text: msg.output, isError: msg.isError, by: msg.user })
-      return
-    }
-
-    if (msg.language && msg.language !== languageRef.current) {
-      languageRef.current = msg.language
-      setLanguage(msg.language)
-    }
-    if (typeof msg.text !== 'string') return
-    if (editorRef.current) applyRemoteText(editorRef.current, msg.text, applyingRemote)
-    else pendingText.current = msg.text // editor not mounted yet
+  const onOutput = useCallback((msg) => {
+    setResult({ text: msg.output, isError: msg.isError, by: msg.user })
   }, [])
 
-  const { status, presence, sendUpdate, sendOutput } = useRoomSocket(roomSlug, onRemote)
+  const seed = useMemo(
+    () => ({ language: initialLanguage, snippet: CODE_SNIPPETS[initialLanguage] ?? '' }),
+    [initialLanguage],
+  )
 
+  const { ydoc, status, presence, sendOutput, sendLanguage } = useRoomSocket(roomSlug, {
+    onOutput,
+    seed,
+  })
+
+  // the shared language lives inside the Yjs doc, so every client switches together
+  useEffect(() => {
+    const meta = ydoc.getMap('meta')
+    const sync = () => setLanguage(meta.get('language') ?? initialLanguage)
+    sync()
+    meta.observe(sync)
+    return () => meta.unobserve(sync)
+  }, [ydoc, initialLanguage])
 
   useEffect(() => {
     const monaco = monacoRef.current
@@ -94,7 +87,14 @@ const CodeEditor = ({
     clearStaleMarkers(monaco, model)
   }, [language])
 
-  useEffect(() => () => markerListener.current?.dispose(), [])
+  // tear down the Yjs binding and the marker listener with the component
+  useEffect(
+    () => () => {
+      bindingRef.current?.destroy()
+      markerListener.current?.dispose()
+    },
+    [],
+  )
 
   useEffect(() => {
     onLive?.({ status, presence })
@@ -108,36 +108,27 @@ const CodeEditor = ({
   const onMount = (editor, monaco) => {
     monacoRef.current = monaco
     editorRef.current = editor
-    monaco.editor.setModelLanguage(editor.getModel(), languageRef.current)
-
+    const model = editor.getModel()
+    monaco.editor.setModelLanguage(model, language)
 
     markerListener.current = monaco.editor.onDidChangeMarkers(() => {
-      const model = editor.getModel()
-      if (model) clearStaleMarkers(monaco, model)
+      const m = editor.getModel()
+      if (m) clearStaleMarkers(monaco, m)
     })
 
-    applyingRemote.current = true
-    editor.getModel().setEOL(monaco.editor.EndOfLineSequence.LF) // same line endings for everyone
-    applyingRemote.current = false
-    if (pendingText.current !== null) {
-      applyRemoteText(editor, pendingText.current, applyingRemote)
-      pendingText.current = null
-    }
+    model.setEOL(monaco.editor.EndOfLineSequence.LF) // Yjs text uses \n; Windows must not add \r\n
+    // Yjs <-> Monaco: from here on, typing and remote edits both go through the CRDT
+    bindingRef.current = new MonacoBinding(ydoc.getText('text'), model, new Set([editor]))
+
     editor.onDidChangeCursorPosition((e) =>
       setCursor({ line: e.position.lineNumber, col: e.position.column }),
     )
     editor.focus()
   }
 
-  const onChange = (value) => {
-    if (applyingRemote.current) return
-    sendUpdate(value ?? '', languageRef.current)
-  }
-
-  const onSelect = (lang) => {
-    languageRef.current = lang
-    setLanguage(lang)
-  }
+  // Switch the shared language and load that language's starter snippet.
+  // The server applies both changes as one Yjs transaction for every client.
+  const onSelect = (lang) => sendLanguage(lang, CODE_SNIPPETS[lang] ?? '')
 
   const denied = status === 'denied'
   const options = useMemo(
@@ -176,8 +167,6 @@ const CodeEditor = ({
             theme={theme}
             beforeMount={defineThemes}
             onMount={onMount}
-            defaultValue={CODE_SNIPPETS[initialLanguage] ?? ''}
-            onChange={onChange}
             options={options}
           />
         </div>
