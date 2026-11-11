@@ -145,4 +145,14 @@ async def join_room(db: AsyncSession, user: User, slug: str) -> dict:
 
     counts = await _member_counts(db, [info["id"]])
     info["member_count"] = 1 + counts.get(info["id"], 0)
+    
+    
+    names = await db.scalars(
+        select(User.name)
+        .join(RoomMember, RoomMember.user_id == User.id)
+        .where(RoomMember.room_id == info["id"])
+        .order_by(RoomMember.joined_at)
+        .limit(20)
+    )
+    info["members"] = [owner_name, *names.all()]
     return info

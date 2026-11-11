@@ -32,10 +32,9 @@ const Navbar = () => {
             to={l.to}
             end={l.to === '/'}
             className={({ isActive }) =>
-              `border-b-2 pb-1 text-sm transition ${
-                isActive
-                  ? 'border-orange-300 text-white'
-                  : 'border-transparent text-gray-300 hover:text-white'
+              `border-b-2 pb-1 text-sm transition ${isActive
+                ? 'border-orange-300 text-white'
+                : 'border-transparent text-gray-300 hover:text-white'
               }`
             }
           >
@@ -47,14 +46,11 @@ const Navbar = () => {
       <div className="flex items-center gap-3">
         {loading ? null : user ? (
           <>
-            <span className="hidden text-sm text-gray-300 sm:block">
-              Hi, {user.name}
-            </span>
             <Link
-              to="/editor"
-              className="rounded-lg bg-orange-400 px-5 py-2 text-sm font-medium text-white shadow-lg shadow-orange-400/30 hover:bg-orange-300"
+              to="/dashboard"
+              className="rounded-lg bg-orange-400 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-orange-400/30 hover:bg-orange-300"
             >
-              Open Editor
+              Dashboard
             </Link>
             <button
               type="button"

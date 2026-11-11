@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import models  # noqa: F401  (registers tables)
-from app.controllers import auth_controller, execution_controller
+from app.controllers import auth_controller, execution_controller, collab_controller, room_controller
 from app.core.config import settings
 from app.core.database import Base, engine
 
@@ -42,3 +42,4 @@ app.add_middleware(
 app.include_router(auth_controller.router)
 app.include_router(execution_controller.router)
 app.include_router(room_controller.router)
+app.include_router(collab_controller.router)
