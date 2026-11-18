@@ -6,6 +6,8 @@ import { MonacoBinding } from 'y-monaco'
 import { UndoManager } from 'yjs'
 import { CODE_SNIPPETS, FILE_NAMES } from './constants.js'
 import LanguageSelector from './LanguageSelector.jsx'
+import FileExplorer from './FileExplorer.jsx'
+import { getFileLanguage, getWorkspaceFile, getWorkspaceFileText, getWorkspaceFiles } from './workspaceFiles.js'
 import Output from './Output.jsx'
 import { useRoomSocket } from './useRoomSocket.js'
 
@@ -56,8 +58,11 @@ const CodeEditor = ({
   const bindingRef = useRef(null)
   const undoRef = useRef(null)
   const markerListener = useRef(null)
+  const cursorListener = useRef(null)
 
   const [language, setLanguage] = useState(initialLanguage)
+  const [selectedFileId, setSelectedFileId] = useState(null)
+  const [, setFileRevision] = useState(0)
   const [result, setResult] = useState(null)
   const [cursor, setCursor] = useState({ line: 1, col: 1 })
 
@@ -74,24 +79,44 @@ const CodeEditor = ({
     roomSlug,
     { onOutput, seed },
   )
+  const selectedFile = getWorkspaceFile(ydoc, selectedFileId)
+  const activeFileId = selectedFile ? selectedFileId : null
+  const selectedText = activeFileId
+    ? getWorkspaceFileText(ydoc, activeFileId)
+    : ydoc.getText('text')
+
+  useEffect(() => {
+    const workspace = getWorkspaceFiles(ydoc)
+    const refreshFiles = (events) => {
+      if (events && !events.some((event) => event.path.length <= 1)) return
+      setFileRevision((value) => value + 1)
+      setSelectedFileId((id) => (id && !workspace.has(id) ? null : id))
+    }
+    workspace.observeDeep(refreshFiles)
+    return () => workspace.unobserveDeep(refreshFiles)
+  }, [ydoc])
+
+  useEffect(() => {
+    awarenessRef.current?.setLocalStateField('fileId', activeFileId)
+  }, [activeFileId, awarenessRef, status])
+
+  const handleSelectFile = (id) => {
+    setSelectedFileId(id)
+    setResult(null)
+  }
+
 
   // the shared language lives inside the Yjs doc, so every client switches together
   useEffect(() => {
     const meta = ydoc.getMap('meta')
     const sync = () => setLanguage(meta.get('language') ?? initialLanguage)
+
     sync()
     meta.observe(sync)
+
     return () => meta.unobserve(sync)
   }, [ydoc, initialLanguage])
 
-  // when the language changes, apply it to the editor and drop stale error marks
-  useEffect(() => {
-    const monaco = monacoRef.current
-    const model = editorRef.current?.getModel()
-    if (!monaco || !model) return
-    monaco.editor.setModelLanguage(model, language)
-    clearStaleMarkers(monaco, model)
-  }, [language])
 
   // tear down the undo manager, the Yjs binding and the marker listener with the component
   useEffect(
@@ -99,6 +124,7 @@ const CodeEditor = ({
       undoRef.current?.destroy()
       bindingRef.current?.destroy()
       markerListener.current?.dispose()
+      cursorListener.current?.dispose()
     },
     [],
   )
@@ -114,10 +140,14 @@ const CodeEditor = ({
   }
 
   const onMount = (editor, monaco) => {
+    bindingRef.current?.destroy()
+    undoRef.current?.destroy()
+    markerListener.current?.dispose()
+    cursorListener.current?.dispose()
     monacoRef.current = monaco
     editorRef.current = editor
     const model = editor.getModel()
-    monaco.editor.setModelLanguage(model, language)
+    monaco.editor.setModelLanguage(model, editorLanguage)
 
     // whenever Monaco updates marks, drop stale ones from the other language's checker
     markerListener.current = monaco.editor.onDidChangeMarkers(() => {
@@ -130,7 +160,7 @@ const CodeEditor = ({
     // Yjs <-> Monaco. Passing the awareness object is what shows other people's
     // cursors and selections (the name labels are styled in useRoomSocket).
     bindingRef.current = new MonacoBinding(
-      ydoc.getText('text'),
+      selectedText ?? ydoc.getText('text'),
       model,
       new Set([editor]),
       awarenessRef.current,
@@ -140,7 +170,7 @@ const CodeEditor = ({
     // so tracking only the binding means Ctrl+Z never undoes other people's typing
     // or changes made by the server (like a language switch).
     undoRef.current?.destroy()
-    const undoManager = new UndoManager(ydoc.getText('text'), {
+    const undoManager = new UndoManager(selectedText ?? ydoc.getText('text'), {
       trackedOrigins: new Set([bindingRef.current]),
     })
     undoRef.current = undoManager
@@ -150,7 +180,7 @@ const CodeEditor = ({
     editor.addCommand(KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyZ, () => undoManager.redo())
     editor.addCommand(KeyMod.CtrlCmd | KeyCode.KeyY, () => undoManager.redo())
 
-    editor.onDidChangeCursorPosition((e) =>
+    cursorListener.current = editor.onDidChangeCursorPosition((e) =>
       setCursor({ line: e.position.lineNumber, col: e.position.column }),
     )
     editor.focus()
@@ -176,11 +206,26 @@ const CodeEditor = ({
     [fontSize, denied],
   )
 
-  const fileName = FILE_NAMES[language] ?? 'main.txt'
-
+  const mainFileName = FILE_NAMES[language] ?? 'main.txt'
+  const fileName = selectedFile?.get('name') ?? mainFileName
+  const editorLanguage = selectedFile ? getFileLanguage(fileName) : language
+  // Apply the selected file's language to Monaco and clear stale error marks.
+  useEffect(() => {
+    const monaco = monacoRef.current
+    const model = editorRef.current?.getModel()
+    if (!monaco || !model) return
+    monaco.editor.setModelLanguage(model, editorLanguage)
+    clearStaleMarkers(monaco, model)
+  }, [editorLanguage])
   return (
-    <div className="relative z-10 grid min-h-0 flex-1 gap-4 p-4 pt-0 sm:px-6 lg:grid-cols-[minmax(0,1fr)_380px] lg:grid-rows-[minmax(0,1fr)]">
+    <div className="relative z-10 grid min-h-0 flex-1 gap-4 p-4 pt-0 sm:px-6 lg:grid-cols-[14rem_minmax(0,1fr)_380px] lg:grid-rows-[minmax(0,1fr)]">
       {/* editor card */}
+      <FileExplorer
+        ydoc={ydoc}
+        selectedFileId={activeFileId}
+        mainFileName={mainFileName}
+        onSelectFile={handleSelectFile}
+      />
       <section className="flex h-[65vh] min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#0a0c16] lg:h-auto">
         {/* tab bar */}
         <div className="flex border-b border-white/10 bg-white/[0.02]">
@@ -192,8 +237,9 @@ const CodeEditor = ({
 
         <div className="min-h-0 flex-1">
           <Editor
+            key={activeFileId ?? 'main'}
             height="100%"
-            language={language}
+            language={editorLanguage}
             theme={theme}
             beforeMount={defineThemes}
             onMount={onMount}
@@ -206,14 +252,18 @@ const CodeEditor = ({
           <span>
             Ln {cursor.line}, Col {cursor.col}
           </span>
-          <LanguageSelector language={language} onSelect={onSelect} />
+          {activeFileId ? (
+            <span className="rounded px-2 py-1 text-slate-300">{editorLanguage}</span>
+          ) : (
+            <LanguageSelector language={language} onSelect={onSelect} />
+          )}
         </div>
       </section>
 
       {/* Run Code + Output */}
       <Output
         editorRef={editorRef}
-        language={language}
+        language={editorLanguage}
         result={result}
         onResult={handleResult}
       />
