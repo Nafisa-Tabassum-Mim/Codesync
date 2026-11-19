@@ -67,7 +67,7 @@ frontend/   React application built with Vite
 ## Contributing
 
 1. Create a branch for your change: `git switch your-change`.
-2. Make and locally check your changes.
+2. Make and locally.
 3. Commit with a clear message and push your branch.
 4. Open a pull request describing what changed and how you checked it.
 

@@ -85,8 +85,14 @@ export function useRoomSocket(slug, { onOutput, seed } = {}) {
     document.head.appendChild(styleEl)
     const refreshStyles = () => {
       let css = ''
+      const localFileId = awareness.getLocalState()?.fileId ?? null
       awareness.getStates().forEach((state, id) => {
-        if (id !== ydoc.clientID && state.user) css += cursorCss(id, state.user)
+        if (id === ydoc.clientID || !state.user) return
+        if ((state.fileId ?? null) === localFileId) {
+          css += cursorCss(id, state.user)
+        } else {
+          css += `.yRemoteSelection-${id}, .yRemoteSelectionHead-${id} { display: none !important; }`
+        }
       })
       styleEl.textContent = css
     }
